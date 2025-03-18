@@ -1,0 +1,125 @@
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
+    filters, CallbackContext
+)
+import requests
+import logging
+
+# Securely store your tokens (Replace with actual values)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+TINYURL_API_KEY = os.getenv("TINYURL_API_KEY")
+
+# Your Telegram channel and group
+CHANNEL_ID = "-1002682987275"
+GROUP_ID = "-1002375756524"
+
+# Enable logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def check_membership(user_id: int, context: CallbackContext) -> bool:
+    """Checks if a user is a member of the required channel/group"""
+    try:
+        chat_member_channel = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+        chat_member_group = await context.bot.get_chat_member(GROUP_ID, user_id)
+
+        if chat_member_channel.status in ["member", "administrator", "creator"] or \
+           chat_member_group.status in ["member", "administrator", "creator"]:
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error checking membership: {e}")
+        return False
+
+async def send_join_message(update: Update):
+    """Sends a message asking the user to join the channel/group"""
+    keyboard = [
+        [InlineKeyboardButton("📢 Join Channel", url="https://t.me/latest_animes_world")],
+        [InlineKeyboardButton("💬 Join Group", url="https://t.me/All_anime_chat")],
+        [InlineKeyboardButton("✅ I've Joined", callback_data="verify_membership")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("🚀 You must join our channel & group to use this bot!", reply_markup=reply_markup)
+
+async def verify_membership(update: Update, context: CallbackContext):
+    """Handles the '✅ I've Joined' button click"""
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    await query.answer()  # Acknowledge button press
+
+    if await check_membership(user_id, context):
+        await query.edit_message_text("🎉 Thank you for joining! You can now use the bot.")
+        await query.message.reply_text("Send me a URL, and I'll shorten it for you!\n\nUsage: /shorten <URL>")
+    else:
+        await query.edit_message_text(
+            "❌ You haven't joined yet! Please join both and try again.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 Join Channel", url="https://t.me/latest_animes_world")],
+                [InlineKeyboardButton("💬 Join Group", url="https://t.me/All_anime_chat")],
+                [InlineKeyboardButton("✅ I've Joined", callback_data="verify_membership")]
+            ])
+        )
+
+async def start(update: Update, context: CallbackContext):
+    """Sends a welcome message"""
+    user_id = update.message.from_user.id
+    if not await check_membership(user_id, context):
+        await send_join_message(update)
+        return
+    
+    await update.message.reply_text("Send me a URL, and I'll shorten it for you!\n\nUsage: /shorten <URL>")
+
+async def shorten(update: Update, context: CallbackContext):
+    """Shortens a given URL"""
+    user_id = update.message.from_user.id
+    if not await check_membership(user_id, context):
+        await send_join_message(update)
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Usage: /shorten <URL>")
+        return
+    
+    url = context.args[0]
+
+    if not url.startswith(("http://", "https://")):
+        await update.message.reply_text("Please provide a valid URL starting with http:// or https://")
+        return
+
+    short_url = shorten_url(url)
+    await update.message.reply_text(f"🔗 Shortened URL: {short_url}")
+
+def shorten_url(url):
+    """Shortens a URL using TinyURL API"""
+    try:
+        api_url = "https://api.tinyurl.com/create"
+        headers = {
+            "Authorization": f"Bearer {TINYURL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {"url": url}
+
+        response = requests.post(api_url, json=data, headers=headers)
+        response_data = response.json()
+
+        if "data" in response_data and "tiny_url" in response_data["data"]:
+            return response_data["data"]["tiny_url"]
+        else:
+            return f"Error: {response_data.get('errors', 'Could not shorten URL')}"
+    except Exception as e:
+        return "Error: Unable to process your request."
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("shorten", shorten))
+    app.add_handler(CallbackQueryHandler(verify_membership, pattern="verify_membership"))
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
